@@ -39,10 +39,10 @@ mainC1  = do
 type Method         = String
 
 -- | Wakeup method state (enabled/disabled).
-data MethodState    = On            -- ^ @On@ state to be applied.
-                    | Off           -- ^ @Off@ state to be applied.
-                    | DefaultOn     -- ^ @On@ state already set in wakeup file.
-                    | DefaultOff    -- ^ @Off@ state already set in wakeup file.
+data MethodState    = On        -- ^ @On@ state to be applied.
+                    | Off       -- ^ @Off@ state to be applied.
+                    | LoadedOn  -- ^ @On@ state already set in wakeup file.
+                    | LoadedOff -- ^ @Off@ state already set in wakeup file.
   deriving (Show)
 instance Read MethodState where
     readsPrec d     = readParen (d > 10) $ \k -> do
@@ -57,14 +57,19 @@ instance Read MethodState where
                                 []
 instance Eq MethodState where
     On          == On           = True
-    On          == DefaultOn    = True
-    DefaultOn   == On           = True
-    DefaultOn   == DefaultOn    = True
+    On          == LoadedOn     = True
+    LoadedOn    == On           = True
+    LoadedOn    == LoadedOn     = True
     Off         == Off          = True
-    Off         == DefaultOff   = True
-    DefaultOff  == Off          = True
-    DefaultOff  == DefaultOff   = True
+    Off         == LoadedOff    = True
+    LoadedOff   == Off          = True
+    LoadedOff   == LoadedOff    = True
     _           == _            = False
+isChanged :: MethodState -> Bool
+isChanged On        = True
+isChanged Off       = True
+isChanged LoadedOn  = False
+isChanged LoadedOff = False
 
 -- | Map with states of each wakeup method.
 type MethodMap      = S.Map Method MethodState
@@ -76,9 +81,9 @@ parseWakeup         = foldr go S.empty . lines
   where
     go :: String -> MethodMap -> MethodMap
     go l            = case wordsBy (`elem` " \t") l of
-                        m : _ : "*enabled"  : _ -> S.insert (map toLower m) On
-                        m : _ : "*disabled" : _ -> S.insert (map toLower m) Off
-                        _                       -> id
+        m : _ : "*enabled"  : _ -> S.insert m LoadedOn
+        m : _ : "*disabled" : _ -> S.insert m LoadedOff
+        _                       -> id
 
 -- | Generate options based on available methods on current system:
 --  * Default values for each option is current method state.
@@ -88,29 +93,36 @@ parseWakeup         = foldr go S.empty . lines
 generateOpts :: MethodMap -> Parser MethodMap
 generateOpts        = S.foldrWithKey go (pure S.empty)
   where
+    ifDiffer :: Eq a => a -> a -> a
+    ifDiffer x y
+      | x == y      = x
+      | otherwise   = y
     go :: Method -> MethodState -> Parser MethodMap -> Parser MethodMap
-    go k x zs       = S.insert k <$>
-                        option auto
-                            ( long k <> value x <> metavar (show On ++ "|" ++ show Off) <>
-                              help ("Enable or disable "
-                                ++ map toUpper k ++ " wakeup method."))
-                            <*>
-                        zs
+    go k x zs       = S.insert k <$> option (auto >>= return . ifDiffer x)
+                            (  long (map toLower k)
+                            <> value x
+                            <> metavar (show On ++ "|" ++ show Off)
+                            <> help ("Enable or disable "
+                                ++ k ++ " wakeup method."))
+                        <*> zs
 
-work6 :: MethodMap -> IO ()
-work6 xs              = do
+work :: MethodMap -> IO ()
+work xs             = do
     print (S.toList xs)
+    let ys = S.toList . S.filter isChanged $ xs
+    print ys
+    --mapM_ (writeFile acpiFile . fst) ys
 
-main6 :: IO ()
-main6   = do
+main_ :: IO ()
+main_               = do
             ac <- readFile acpiFile
             let opts = generateOpts (parseWakeup ac)
             join . execParser $
-                info (helper <*> (work6 <$> opts))
+                info (helper <*> (work <$> opts))
                 (  fullDesc
                 <> header "Helper for systemd wakeup service."
                 <> progDesc "Enable or disable selected wakeup methods." )
 
 main :: IO ()
-main = main6
+main = main_
 
