@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
@@ -8,6 +9,9 @@ import Control.Monad
 import Data.List.Split
 import Options.Applicative
 import Data.Char
+import Data.Ini
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
 
 import Control.Monad.Except
 import Data.ConfigFile
@@ -37,12 +41,13 @@ mainC1  = do
 
 -- | ACPI wakeup method name.
 type Method         = String
+type MethodT         = T.Text
 
 -- | Wakeup method state (enabled/disabled).
 data MethodState    = On        -- ^ @On@ state to be applied.
                     | Off       -- ^ @Off@ state to be applied.
-                    | LoadedOn  -- ^ @On@ state already set in wakeup file.
-                    | LoadedOff -- ^ @Off@ state already set in wakeup file.
+                    | LoadedOn  -- ^ @On@ state read from system.
+                    | LoadedOff -- ^ @Off@ state read from system.
   deriving (Show)
 instance Read MethodState where
     readsPrec d     = readParen (d > 10) $ \k -> do
@@ -73,6 +78,7 @@ isChanged LoadedOff = False
 
 -- | Map with states of each wakeup method.
 type MethodMap      = S.Map Method MethodState
+type MethodMapT      = S.Map MethodT MethodState
 
 -- | Parse ACPI wakeup file (@/proc/acpi/wakeup@ usually) and create a map
 -- with states of each method.
@@ -80,16 +86,27 @@ parseWakeup :: String -> MethodMap
 parseWakeup         = foldr go S.empty . lines
   where
     go :: String -> MethodMap -> MethodMap
-    go l            = case wordsBy (`elem` " \t") l of
+    go l            = case wordsBy (`elem` [' ', '\t']) l of
         m : _ : "*enabled"  : _ -> S.insert m LoadedOn
         m : _ : "*disabled" : _ -> S.insert m LoadedOff
         _                       -> id
+parseWakeupT :: T.Text -> MethodMapT
+parseWakeupT        = foldr go S.empty . T.lines
+  where
+    go :: T.Text -> MethodMapT -> MethodMapT
+    go l            =
+        case filter (not . T.null) . T.split (`elem` [' ',  '\t']) $ l of
+          m : _ : "*enabled"  : _ -> S.insert m LoadedOn
+          m : _ : "*disabled" : _ -> S.insert m LoadedOff
+          _                       -> id
+
 
 -- | Generate options based on available methods on current system:
---  * Default values for each option is current method state.
---  * I have used regular options instead of flags, because flag may only
---  /switch/ method from current value, but it does not allow to /specify/
---  desired method state and leave for the program to apply it.
+--
+--      * Default values for each option is current method state.
+--      * I have used regular options instead of flags, because flag may only
+--      /switch/ method from current value, but it does not allow to /specify/
+--      desired method state and leave for the program to apply it.
 generateOpts :: MethodMap -> Parser MethodMap
 generateOpts        = S.foldrWithKey go (pure S.empty)
   where
@@ -98,13 +115,29 @@ generateOpts        = S.foldrWithKey go (pure S.empty)
       | x == y      = x
       | otherwise   = y
     go :: Method -> MethodState -> Parser MethodMap -> Parser MethodMap
-    go k x zs       = S.insert k <$> option (auto >>= return . ifDiffer x)
+    go k x zs       = S.insert k <$> option (fmap (ifDiffer x) auto)
                             (  long (map toLower k)
                             <> value x
                             <> metavar (show On ++ "|" ++ show Off)
                             <> help ("Enable or disable "
                                 ++ k ++ " wakeup method."))
                         <*> zs
+generateOptsT :: MethodMapT -> Parser MethodMapT
+generateOptsT        = S.foldrWithKey go (pure S.empty)
+  where
+    ifDiffer :: Eq a => a -> a -> a
+    ifDiffer x y
+      | x == y      = x
+      | otherwise   = y
+    go :: MethodT -> MethodState -> Parser MethodMapT -> Parser MethodMapT
+    go k x zs       = S.insert k <$> option (fmap (ifDiffer x) auto)
+                            (  long (T.unpack (T.toLower k))
+                            <> value x
+                            <> metavar (show On ++ "|" ++ show Off)
+                            <> help ("Enable or disable "
+                                ++ (show k) ++ " wakeup method."))
+                        <*> zs
+
 
 work :: MethodMap -> IO ()
 work xs             = do
@@ -112,13 +145,19 @@ work xs             = do
     let ys = S.toList . S.filter isChanged $ xs
     print ys
     --mapM_ (writeFile acpiFile . fst) ys
+workT :: MethodMapT -> IO ()
+workT xs             = do
+    print (S.toList xs)
+    let ys = S.toList . S.filter isChanged $ xs
+    print ys
 
 main_ :: IO ()
 main_               = do
-            ac <- readFile acpiFile
-            let opts = generateOpts (parseWakeup ac)
+            ac <- T.readFile acpiFile
+            --let opts = generateOpts (parseWakeup ac)
+            let opts = generateOptsT (parseWakeupT ac)
             join . execParser $
-                info (helper <*> (work <$> opts))
+                info (helper <*> (workT <$> opts))
                 (  fullDesc
                 <> header "Helper for systemd wakeup service."
                 <> progDesc "Enable or disable selected wakeup methods." )

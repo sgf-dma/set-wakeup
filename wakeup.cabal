@@ -29,6 +29,8 @@ executable wakeup-exe
                      , split
                      , optparse-applicative
                      , ConfigFile
+                     , ini
+                     , text
                      , wakeup
   default-language:    Haskell2010
 
