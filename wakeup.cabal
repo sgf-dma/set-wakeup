@@ -28,9 +28,9 @@ executable wakeup-exe
                      , containers
                      , split
                      , optparse-applicative
-                     , ConfigFile
                      , ini
                      , text
+                     , attoparsec
                      , wakeup
   default-language:    Haskell2010
 

@@ -14,8 +14,10 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as T
 
 import Control.Monad.Except
-import Data.ConfigFile
 import qualified Data.Map.Strict as S
+import qualified Data.Attoparsec.Text as A
+import Data.Foldable
+import Control.Monad.Except
 
 acpiFile :: FilePath
 acpiFile            = "/proc/acpi/wakeup"
@@ -24,23 +26,7 @@ acpiFile            = "/proc/acpi/wakeup"
 cf :: FilePath
 cf = "./1.cfg"
 
-mainC1 :: IO ()
-mainC1  = do
-    m <- readfile emptyCP cf
-    -- _ <- runExceptT m
-    r <- runExceptT $ do
-      cf <- m
-      return cf
-      d <- get cf "DEFAULT" "disable"
-      --e <- get cf "DEFAULT" "enable"
-      return (d :: String)
-      {---e <- get "DEFAULT" "enable" cf
-      return (d, e)-}
-    print r
-    return ()
-
 -- | ACPI wakeup method name.
-type Method         = String
 type MethodT         = T.Text
 
 -- | Wakeup method state (enabled/disabled).
@@ -51,15 +37,25 @@ data MethodState    = On        -- ^ @On@ state to be applied.
   deriving (Show)
 instance Read MethodState where
     readsPrec d     = readParen (d > 10) $ \k -> do
-                        (s, t) <- lex k
-                        case s of
-                          _
-                            | s `elem` ["On", "on", "Enabled", "enabled"] ->
-                                return (On, t)
-                            | s `elem` ["Off", "off", "Disabled", "disabled"] ->
-                                return (Off, t)
-                            | otherwise ->
-                                []
+        (s, t) <- lex k
+        case s of
+          _
+            | s `elem` ["On", "on", "Enabled", "enabled"] ->
+                return (On, t)
+            | s `elem` ["Off", "off", "Disabled", "disabled"] ->
+                return (Off, t)
+            | otherwise ->
+                []
+parseOn :: A.Parser T.Text
+parseOn         = asum . map A.string
+                    $ ["On", "on", "enabled", "Enabled"]
+parseOff :: A.Parser T.Text
+parseOff        = asum . map A.string
+                    $ ["Off", "off", "disabled", "Disabled"]
+parseMethodState :: A.Parser MethodState
+parseMethodState = (pure On <* parseOn) <|> (pure Off <* parseOff)
+loadMethodState :: A.Parser MethodState
+loadMethodState  = (pure LoadedOn <* parseOn) <|> (pure LoadedOff <* parseOff)
 instance Eq MethodState where
     On          == On           = True
     On          == LoadedOn     = True
@@ -77,19 +73,10 @@ isChanged LoadedOn  = False
 isChanged LoadedOff = False
 
 -- | Map with states of each wakeup method.
-type MethodMap      = S.Map Method MethodState
 type MethodMapT      = S.Map MethodT MethodState
 
 -- | Parse ACPI wakeup file (@/proc/acpi/wakeup@ usually) and create a map
 -- with states of each method.
-parseWakeup :: String -> MethodMap
-parseWakeup         = foldr go S.empty . lines
-  where
-    go :: String -> MethodMap -> MethodMap
-    go l            = case wordsBy (`elem` [' ', '\t']) l of
-        m : _ : "*enabled"  : _ -> S.insert m LoadedOn
-        m : _ : "*disabled" : _ -> S.insert m LoadedOff
-        _                       -> id
 parseWakeupT :: T.Text -> MethodMapT
 parseWakeupT        = foldr go S.empty . T.lines
   where
@@ -100,28 +87,12 @@ parseWakeupT        = foldr go S.empty . T.lines
           m : _ : "*disabled" : _ -> S.insert m LoadedOff
           _                       -> id
 
-
 -- | Generate options based on available methods on current system:
 --
 --      * Default values for each option is current method state.
 --      * I have used regular options instead of flags, because flag may only
 --      /switch/ method from current value, but it does not allow to /specify/
 --      desired method state and leave for the program to apply it.
-generateOpts :: MethodMap -> Parser MethodMap
-generateOpts        = S.foldrWithKey go (pure S.empty)
-  where
-    ifDiffer :: Eq a => a -> a -> a
-    ifDiffer x y
-      | x == y      = x
-      | otherwise   = y
-    go :: Method -> MethodState -> Parser MethodMap -> Parser MethodMap
-    go k x zs       = S.insert k <$> option (fmap (ifDiffer x) auto)
-                            (  long (map toLower k)
-                            <> value x
-                            <> metavar (show On ++ "|" ++ show Off)
-                            <> help ("Enable or disable "
-                                ++ k ++ " wakeup method."))
-                        <*> zs
 generateOptsT :: MethodMapT -> Parser MethodMapT
 generateOptsT        = S.foldrWithKey go (pure S.empty)
   where
@@ -138,13 +109,18 @@ generateOptsT        = S.foldrWithKey go (pure S.empty)
                                 ++ (show k) ++ " wakeup method."))
                         <*> zs
 
+parseConfig :: MethodMapT -> Ini -> Either String MethodMapT
+parseConfig xs ini  = do
+    ks <- keys "Main" ini
+    sequence . S.mapWithKey (go ini ks) $ xs
+  where
+    go :: Ini -> [T.Text] -> MethodT -> MethodState
+          -> Either String MethodState
+    go ini ks k x
+      -- `parseValue` parses using `parseOnly (f <* endOfInput)`.
+      | k `elem` ks = parseValue "Main" k parseMethodState ini
+      | otherwise   = return x
 
-work :: MethodMap -> IO ()
-work xs             = do
-    print (S.toList xs)
-    let ys = S.toList . S.filter isChanged $ xs
-    print ys
-    --mapM_ (writeFile acpiFile . fst) ys
 workT :: MethodMapT -> IO ()
 workT xs             = do
     print (S.toList xs)
@@ -154,8 +130,11 @@ workT xs             = do
 main_ :: IO ()
 main_               = do
             ac <- T.readFile acpiFile
+            ini <- readIniFile "1.cfg"
+            cf <- either error return $
+                    ini >>= parseConfig (parseWakeupT ac)
             --let opts = generateOpts (parseWakeup ac)
-            let opts = generateOptsT (parseWakeupT ac)
+            let opts = generateOptsT cf
             join . execParser $
                 info (helper <*> (workT <$> opts))
                 (  fullDesc
