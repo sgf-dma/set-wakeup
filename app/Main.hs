@@ -46,6 +46,7 @@ instance Read MethodState where
                 return (Off, t)
             | otherwise ->
                 []
+
 parseOn :: A.Parser T.Text
 parseOn         = asum . map A.string
                     $ ["On", "on", "enabled", "Enabled"]
@@ -56,6 +57,7 @@ parseMethodState :: A.Parser MethodState
 parseMethodState = (pure On <* parseOn) <|> (pure Off <* parseOff)
 loadMethodState :: A.Parser MethodState
 loadMethodState  = (pure LoadedOn <* parseOn) <|> (pure LoadedOff <* parseOff)
+
 instance Eq MethodState where
     On          == On           = True
     On          == LoadedOn     = True
@@ -74,6 +76,7 @@ isChanged LoadedOff = False
 
 -- | Map with states of each wakeup method.
 type MethodMapT      = S.Map MethodT MethodState
+type MethodMapTM     = S.Map MethodT (Maybe MethodState)
 
 -- | Parse ACPI wakeup file (@/proc/acpi/wakeup@ usually) and create a map
 -- with states of each method.
@@ -108,6 +111,18 @@ generateOptsT        = S.foldrWithKey go (pure S.empty)
                             <> help ("Enable or disable "
                                 ++ (show k) ++ " wakeup method."))
                         <*> zs
+generateOptsTM :: MethodMapTM -> Parser MethodMapTM
+generateOptsTM        = S.foldrWithKey go (pure S.empty)
+  where
+    go :: MethodT -> Maybe MethodState -> Parser MethodMapTM -> Parser MethodMapTM
+    go k x zs       = S.insert k <$> option (Just <$> auto)
+                            (  long (T.unpack (T.toLower k))
+                            <> value x
+                            <> metavar (show On ++ "|" ++ show Off)
+                            <> help ("Enable or disable "
+                                ++ (show k) ++ " wakeup method."))
+                        <*> zs
+
 
 parseConfig :: MethodMapT -> Ini -> Either String MethodMapT
 parseConfig xs ini  = do
@@ -120,6 +135,18 @@ parseConfig xs ini  = do
       -- `parseValue` parses using `parseOnly (f <* endOfInput)`.
       | k `elem` ks = parseValue "Main" k parseMethodState ini
       | otherwise   = return x
+parseConfigl :: MethodMapTM -> Ini -> Either String MethodMapTM
+parseConfigl xs ini  = do
+    ks <- keys "Main" ini
+    sequence . S.mapWithKey (go ini ks) $ xs
+  where
+    go :: Ini -> [T.Text] -> MethodT -> Maybe MethodState
+          -> Either String (Maybe MethodState)
+    go ini ks k x
+      -- `parseValue` parses using `parseOnly (f <* endOfInput)`.
+      | k `elem` ks = Just <$> parseValue "Main" k parseMethodState ini
+      | otherwise   = return x
+
 
 workT :: MethodMapT -> IO ()
 workT xs             = do
@@ -141,6 +168,29 @@ main_               = do
                 <> header "Helper for systemd wakeup service."
                 <> progDesc "Enable or disable selected wakeup methods." )
 
+main_l :: IO ()
+main_l               = do
+            ac <- T.readFile acpiFile
+            let acS = parseWakeupT ac
+                ac0 = S.map (const Nothing) acS
+            ini <- readIniFile "1.cfg"
+            cf <- either error return $
+                    ini >>= parseConfigl ac0
+            print cf
+            let opts = generateOptsTM cf
+                opts1  = mergeMaps1 (S.map (\x -> maybe x (\y -> if isChanged y then y else x)) acS) <$> opts
+            join . execParser $
+                info (helper <*> (workT <$> opts1))
+                (  fullDesc
+                <> header "Helper for systemd wakeup service."
+                <> progDesc "Enable or disable selected wakeup methods." )
+            return ()
+
+mergeMaps :: Ord k => S.Map k (a -> a) -> S.Map k a -> S.Map k a
+mergeMaps mf mx = S.foldrWithKey (\k f mz -> S.adjust f k  mz) mx mf
+mergeMaps1 :: Ord k => S.Map k (Maybe a -> b) -> S.Map k (Maybe a) -> S.Map k b
+mergeMaps1 mf mx = S.foldrWithKey (\k f mz -> S.insert k (f (join (S.lookup k mx))) mz) S.empty mf
+
 main :: IO ()
-main = main_
+main = main_l
 
