@@ -16,7 +16,14 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Lib
-  build-depends:       base >= 4.7 && < 5
+  ghc-options:         -Wall
+  build-depends:       base
+                     , mtl
+                     , containers
+                     , optparse-applicative
+                     , ini
+                     , text
+                     , attoparsec
   default-language:    Haskell2010
 
 executable wakeup-exe
@@ -24,13 +31,6 @@ executable wakeup-exe
   main-is:             Main.hs
   ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
-                     , mtl
-                     , containers
-                     , split
-                     , optparse-applicative
-                     , ini
-                     , text
-                     , attoparsec
                      , wakeup
   default-language:    Haskell2010
 
