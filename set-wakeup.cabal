@@ -1,8 +1,8 @@
-name:                wakeup
+name:                set-wakeup
 version:             0.1.0.0
 -- synopsis:
 -- description:
-homepage:            https://github.com/sgf-dma/wakeup#readme
+homepage:            https://github.com/sgf-dma/set-wakeup#readme
 license:             BSD3
 license-file:        LICENSE
 author:              sgf
@@ -26,23 +26,23 @@ library
                      , attoparsec
   default-language:    Haskell2010
 
-executable wakeup-exe
+executable set-wakeup-exe
   hs-source-dirs:      app
   main-is:             Main.hs
   ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
-                     , wakeup
+                     , set-wakeup
   default-language:    Haskell2010
 
-test-suite wakeup-test
+test-suite set-wakeup-test
   type:                exitcode-stdio-1.0
   hs-source-dirs:      test
   main-is:             Spec.hs
   build-depends:       base
-                     , wakeup
+                     , set-wakeup
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   default-language:    Haskell2010
 
 source-repository head
   type:     git
-  location: https://github.com/sgf-dma/wakeup
+  location: https://github.com/sgf-dma/set-wakeup
