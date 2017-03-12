@@ -1,2 +1,4 @@
 .stack-work/
 3rd/
+extra-deps/
+.shake/
