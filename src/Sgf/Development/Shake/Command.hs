@@ -25,8 +25,8 @@ import Development.Shake.Command
 newtype Priv a      = Priv a
   deriving (Show)
 
--- | Similar to 'command', but for running as different user. Requires a
--- /non-empty/ username. To run as @root@ without specifying username, use
+-- | 'command', which should run as different user. Requires a /non-empty/
+-- username. To run as @root@ without specifying username, use
 -- 'commandAsRoot'.
 commandAs :: CmdResult r => String              -- ^ User name to run command as.
              -> Priv [Either CmdOption String]  -- ^ Command to run.
@@ -42,21 +42,20 @@ commandAs user (Priv x) = case partitionEithers x of
 commandAsRoot :: CmdResult r => Priv [Either CmdOption String] -> Action r
 commandAsRoot       = commandAs "root"
 
--- | Similar to 'cmd', but for running as different user. Requires a
--- /non-empty/ username. To run as @root@ without specifying username, use
--- 'rootCmd'.
+-- | 'cmd', which should run as different user. Requires a /non-empty/
+-- username. To run as @root@ without specifying username, use 'rootCmd'.
 --
--- This function may be useful for running privileged command directly in `IO`
--- monad instead of `Action` monad, because there is an
+-- This function may be useful for running privileged command directly in 'IO'
+-- monad instead of 'Action' monad, because there is an
 --
 --  > instance CmdResult r => CmdArguments (IO r)
 --
--- If i want to enforce an executable to run by @sudo@ to be given, i should
--- define 'privCmd' like
+-- If i want to enforce, that an executable to run by @sudo@, is given, i
+-- should define 'privCmd' like
 --
 --  > privCmd :: (Arg a, CmdArguments b) => String -> a -> b
 --
--- but 'Arg' is not exported. So i let @sudo@ to fail with no command to run.
+-- but 'Arg' is not exported. So i let @sudo@ fail, when there is no command to run.
 privCmd :: CmdArguments b => String -> b
 --privCmd :: (Arg a, CmdArguments b) => String -> a -> b
 privCmd []          = error "Error, empty user name for privileged command."

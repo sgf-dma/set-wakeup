@@ -26,9 +26,9 @@ library
                         , text
                         , attoparsec
                         , shake
-                        , shelly
-                        , turtle
                         , foldl
+                        , filepath
+                        , directory
   default-language:     Haskell2010
 
 executable set-wakeup-exe

@@ -7,8 +7,6 @@
 {-# LANGUAGE RankNTypes #-}
 
 module Lib
-    ( main_
-    )
   where
 
 import Data.Monoid
@@ -21,6 +19,8 @@ import qualified Data.Attoparsec.Text   as T
 import qualified Data.Map.Strict        as M
 import Control.Monad
 import Control.Monad.Except
+import System.FilePath
+import System.Directory
 
 import Development.Shake.Command
 import Sgf.Development.Shake.Command
@@ -29,7 +29,7 @@ import Sgf.Development.Shake.Command
 -- | ACPI wakeup method name.
 type MethodT         = T.Text
 
--- | Wakeup method state (enabled/disabled).
+-- | Wakeup method state.
 data MethodState    = On        -- ^ @On@ state to be applied.
                     | Off       -- ^ @Off@ state to be applied.
                     | LoadedOn  -- ^ @On@ state read from system.
@@ -53,7 +53,7 @@ isChanged Off       = True
 isChanged LoadedOn  = False
 isChanged LoadedOff = False
 
--- | Add states preferring left argument and keeping `Loaded` state, if equal.
+-- | Add states preferring left argument and keeping @Loaded@ state, if equal.
 -- This is intended to be used with 'foldl'.
 addState :: MethodState -> MethodState -> MethodState
 addState On        LoadedOn     = LoadedOn
@@ -73,13 +73,15 @@ instance Read MethodState where
                 return (Off, t)
             | otherwise ->
                 []
+-- | Parse @On@ states read from config.
 parseOn :: T.Parser T.Text
 parseOn         = asum . map T.string
                     $ ["On", "on", "enabled", "Enabled"]
+-- | Parse @Off@ states read from config.
 parseOff :: T.Parser T.Text
 parseOff        = asum . map T.string
                     $ ["Off", "off", "disabled", "Disabled"]
--- | Parse method state from config file.
+-- | Parse method state read from config file. Returns only 'On' and 'Off'.
 parseMethodState :: T.Parser MethodState
 parseMethodState = (pure On       <* parseOn) <|> (pure Off       <* parseOff)
 -- | Parse method state loaded from system. Returns 'LoadedOn' and
@@ -89,12 +91,12 @@ loadMethodState  = (pure LoadedOn <* parseOn) <|> (pure LoadedOff <* parseOff)
 
 -- | Map with states for each wakeup method.
 type MethodMap      = M.Map MethodT MethodState
--- | Map with list of states (loaded from different sources: system, config
+-- | Map with list of states (gathered from different sources: system, config
 -- file, command-line arguments) for each wakeup method.
 type MethodMapL     = M.Map MethodT [MethodState]
 
--- | Parse ACPI wakeup file (@/proc/acpi/wakeup@ usually) and create a map
--- with states of each method.
+-- | Parse ACPI wakeup file (@\/proc\/acpi\/wakeup@ usually) and create a map
+-- with states for each method.
 parseWakeup :: MethodMapL -> T.Text -> MethodMapL
 parseWakeup xm      = foldr go xm . T.lines
   where
@@ -126,15 +128,15 @@ generateOpts        = sequenceA . M.mapWithKey go
 -- error.
 parseConfig :: [T.Text]     -- ^ Methods available on current system.
             -> MethodMapL -> Ini -> Either String MethodMapL
-parseConfig ts zm0 ini = do
-    ks <- keys "Main" ini
-    foldrM go zm0 ks
+parseConfig ts zm0 ini
+  | null (sections ini) = return zm0
+  | otherwise           = keys "Main" ini >>= foldrM go zm0
   where
     go :: T.Text -> MethodMapL -> Either String MethodMapL
     go k zm
       | k `elem` ts = do
-        x <- parseValue "Main" k parseMethodState ini
-        return (M.insertWith (++) k [x] zm)
+            x <- parseValue "Main" k parseMethodState ini
+            return (M.insertWith (++) k [x] zm)
       | otherwise   = throwError $ "Unknown method "
                             ++ show k ++ " in ini file."
 
@@ -148,14 +150,22 @@ workT acFile xs     = do
     forM_ ys $ \x -> unit $ privCmd "dmitriym" Shell ["echo", T.unpack (fst x), ">", acFile]
     return ()
 
--- | Read system's ACPI methods and their states, then parse ini config file,
--- then parse command-line arguments. The latter overrides the former.
+-- | Read ini config file returning empty 'Ini', if there is no config file.
+readConfig :: FilePath -> IO (Either String Ini)
+readConfig cfFile   = do
+    b <- doesFileExist cfFile
+    c <- if b then T.readFile cfFile else return T.empty
+    return (parseIni c)
+
+-- | Read system's ACPI methods and their states, parse ini config file, parse
+-- command-line arguments (the latter overrides the former) and then apply
+-- resulting method states.
 main_ :: FilePath -> FilePath -> IO ()
 main_ acFile cfFile = do
             c <- T.readFile acFile
             let ac          = parseWakeup M.empty c
                 acMethods   = M.keys ac
-            ini <- readIniFile cfFile
+            ini <- readConfig cfFile
             cf  <- either error return (ini >>= parseConfig acMethods ac)
             let opts = M.map (foldl1 addState) <$> generateOpts cf
             join . execParser $
@@ -164,4 +174,4 @@ main_ acFile cfFile = do
                 <> header "Helper for systemd wakeup service."
                 <> progDesc "Enable or disable selected wakeup methods." )
             return ()
-
+  
