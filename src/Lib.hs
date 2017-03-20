@@ -22,32 +22,8 @@ import qualified Data.Map.Strict        as M
 import Control.Monad
 import Control.Monad.Except
 
-import qualified Turtle as TH
-import qualified Shelly as SH
 import Development.Shake.Command
 import Sgf.Development.Shake.Command
-
-
-shPrivCmd :: (SH.CmdArg a, SH.ShellCmd b) => T.Text -> a -> b
-shPrivCmd u x = SH.cmd "sudo" ("-u" :: T.Text) u x
-
-shRootCmd :: (SH.CmdArg a, SH.ShellCmd b) => a -> b
-shRootCmd         = shPrivCmd "root"
-
-{-class ThPrivCmd m e | m -> e where
-    thPrivCmdC :: T.Text -> T.Text -> [T.Text] -> TH.Shell TH.Line -> m e
-
-instance ThPrivCmd IO TH.ExitCode where
-    thPrivCmdC = thPrivCmd
-
-instance ThPrivCmd TH.Shell TH.Line where
-    thPrivCmdC u cmd args = TH.inproc "sudo" (["-u", u, cmd] ++ args) empty-}
-
-thPrivCmd :: MonadIO m => T.Text -> T.Text -> [T.Text] -> TH.Shell TH.Line -> m TH.ExitCode
-thPrivCmd u cmd args inp = TH.proc "sudo" (["-u", u, cmd] ++ args) inp
-
-thRootCmd :: MonadIO m => T.Text -> [T.Text] -> TH.Shell TH.Line -> m TH.ExitCode
-thRootCmd         = thPrivCmd "root"
 
 
 -- | ACPI wakeup method name.
@@ -163,20 +139,13 @@ parseConfig ts zm0 ini = do
                             ++ show k ++ " in ini file."
 
 -- | Set methods, which state differs from current system's value.
-workT :: MethodMap -> IO ()
-workT xs             = do
+workT :: FilePath -> MethodMap -> IO ()
+workT acFile xs     = do
     print (M.toList xs)
     let ys = M.toList . M.filter isChanged $ xs
     print ys
-    --unit $ cmd
-    --unit $ rootCmd
-    --unit $ rootCmd ("echo" :: String) Shell ("huh?" :: String) (">" :: String) ("1.tmp" :: String)
-    --Stdout out <- rootCmd ("cat" :: String) (Stdin ("Ugh.." :: String)) Shell ("-" :: String) (">>" :: String) ("1.tmp" :: String) ("; cat 1.tmp" :: String)
-    --print (out :: String)
-    print "Rrrrrrrrrrrrrrr"
-    _ <- thRootCmd "echo" ["urk?", ">", "2.tmp"] empty
-    _ <- thRootCmd "cat" ["-", ">>", "2.tmp" ] "Brr.."
-    TH.proc "cat" ["2.tmp"] empty
+    --forM_ ys $ \x -> unit $ rootCmd Shell ("echo" :: String) (T.unpack . fst $ x) acFile
+    forM_ ys $ \x -> unit $ privCmd "dmitriym" Shell ["echo", T.unpack (fst x), ">", acFile]
     return ()
 
 -- | Read system's ACPI methods and their states, then parse ini config file,
@@ -190,7 +159,7 @@ main_ acFile cfFile = do
             cf  <- either error return (ini >>= parseConfig acMethods ac)
             let opts = M.map (foldl1 addState) <$> generateOpts cf
             join . execParser $
-                info (helper <*> (workT <$> opts))
+                info (helper <*> (workT acFile <$> opts))
                 (  fullDesc
                 <> header "Helper for systemd wakeup service."
                 <> progDesc "Enable or disable selected wakeup methods." )
